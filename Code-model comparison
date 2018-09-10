@@ -1,0 +1,73 @@
+setwd("E:/408-Operatons Analytics/Final Exam_6.12")
+
+listings = read.csv("listings-small.csv")
+comments = read.csv("processed_comments.csv")
+
+dim(listings) #4256   27
+dim(comments) # 4256  661
+
+df1 = comments
+df1$price = listings$price 
+df1$calculated_host_listings_count  = listings$calculated_host_listings_count 
+df1$accommodates = listings$accommodates
+
+df1$host_response_rate  = listings$host_response_rate 
+df1$host_response_time = listings$host_response_time
+df1$reviews_per_month = listings$reviews_per_month
+
+df1$bedrooms = listings$bedrooms
+df1$beds = listings$beds
+
+df1$property_type = listings$property_type
+df1$instant_bookable = listings$instant_bookable
+df1$host_is_superhost = listings$host_is_superhost
+df1$number_of_reviews = listings$number_of_reviews
+
+df1$room_type = listings$room_type
+df1$maximum_nights = listings$maximum_nights
+
+dim(df1)
+df1$X = NULL
+
+
+# Before we build our rf model,
+# let's split the data:
+
+library(caTools)
+
+
+set.seed(88)
+spl = sample.split(df1$low_quality, SplitRatio = 0.6)
+df1.train = df1[spl,]
+df1.test = df1[!spl,]
+
+
+###### APPLYING RANDOM FORESTS ######
+
+library(randomForest)
+
+df1.train$low_quality = as.factor(df1.train$low_quality)
+
+set.seed(88)
+df1.rf = randomForest(low_quality ~ ., data = df1.train)
+
+df1.rf.predict = predict(df1.rf, newdata = df1.test, type = "prob")
+df1.rf.predict = df1.rf.predict[,2]
+
+confMat = table(df1.test$low_quality, df1.rf.predict >= 0.11)
+confMat
+
+accuracy_rf = sum(diag(confMat))/nrow(df1.test)
+accuracy_rf #0.8185555
+
+# Compute the ROC curve and the AUC:
+library(ROCR)
+ROCpred = prediction(df1.rf.predict, df1.test$low_quality)
+ROCperf = performance(ROCpred, "tpr", "fpr")
+#plot(ROCperf)
+AUC = as.numeric(performance(ROCpred, "auc")@y.values)
+AUC # 0.8991614
+
+# Look at the variable importances:
+varImpPlot(df1.rf)
+

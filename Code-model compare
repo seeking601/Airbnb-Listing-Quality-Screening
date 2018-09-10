@@ -1,0 +1,186 @@
+listings = read.csv("listings-small.csv")
+View(listings)
+str(listings)
+table(listings$low_quality)
+
+#-------------------------try glm with all variables except for text----------------------
+library(caTools)
+
+set.seed(88)
+spl = sample.split(listings$low_quality, SplitRatio = 0.6)
+train = listings[spl,]
+test = listings[!spl,]
+
+colnames(listings)
+
+listings_glm = glm(low_quality ~ accommodates + bathrooms + bed_type + bedrooms +
+                     room_type + calculated_host_listings_count + cancellation_policy + 
+                     extra_people + guests_included + host_identity_verified +
+                     host_is_superhost + host_response_rate + instant_bookable +
+                     maximum_nights + minimum_nights + number_of_reviews +
+                     price + require_guest_phone_verification + 
+                     + require_guest_profile_picture + reviews_per_month +
+                     property_type + host_response_time + beds, 
+                   data = train, family = "binomial")
+# Inspect it 
+summary(listings_glm)
+
+# Let's now make predictions. Predict on the test set:
+predictTest = predict( listings_glm, newdata = test, type = "response")
+
+confMat = table( test$low_quality , predictTest > 0.5 )
+confMat
+
+
+accuracy = sum( diag(confMat)) / nrow(test)
+accuracy #0.9330593
+
+#-----------------------------use lasso to find important variables---------------
+#-----------------------------use lasso to find important variables---------------
+library(glmnet)
+library(glmnetUtils)
+set.seed(88)
+listings.glmnet.cv = cv.glmnet(low_quality ~ accommodates + bathrooms + bed_type + bedrooms +
+                                 room_type + calculated_host_listings_count + cancellation_policy + 
+                                 extra_people + guests_included + host_identity_verified +
+                                 host_is_superhost + host_response_rate + instant_bookable +
+                                 maximum_nights + minimum_nights + number_of_reviews +
+                                 price + require_guest_phone_verification + 
+                                 + require_guest_profile_picture + reviews_per_month +
+                                 property_type + host_response_time + beds, data = train, family = "binomial", nfolds = 5)
+
+# We can find the optimal lambda by accessing lambda.min:
+lambda.min = listings.glmnet.cv$lambda.min
+lambda.min
+
+# To access the coefficients, we can use coefficients() again.
+# Whenever we have to specify s, we can specify s = "lambda.min"
+# to use the optimal value of s / lambda.
+coefficients(prostate.glmnet.cv, s = "lambda.min")
+
+# Pick out non-zero coefficients:
+coeffs = coefficients(listings.glmnet.cv, s = "lambda.min") 
+row.names(coeffs)[ which(coeffs != 0) ]
+
+
+#---------------------------use random forest to find important variables----------
+library(randomForest)
+# We can rectify this by converting Reverse to a factor:
+train_rf = train
+train_rf$low_quality = as.factor(train_rf$low_quality)
+
+set.seed(88)
+listings.rf = randomForest(low_quality ~ accommodates + bathrooms + bed_type + bedrooms +
+                     room_type + calculated_host_listings_count + cancellation_policy + 
+                     extra_people + guests_included + host_identity_verified +
+                     host_is_superhost + host_response_rate + instant_bookable +
+                     maximum_nights + minimum_nights + number_of_reviews +
+                     price + require_guest_phone_verification + 
+                     + require_guest_profile_picture + reviews_per_month +
+                     property_type + host_response_time + beds, 
+                   data = train_rf, importance = TRUE)
+
+varImpPlot(listings.rf, type = 1)
+
+# To get the impurity importances, pass type = 2:
+varImpPlot(listings.rf, type = 2)
+
+# Let's now make predictions on the test set:
+listings.predict = predict(listings.rf, newdata = test)
+
+# Our confusion matrix is:
+confMat_rf = table(test$low_quality, listings.predict)
+confMat_rf
+
+#----------------------------using review_comments only----------------------
+#----------------------------------------------------------------------------
+
+comments = listings[, c(23, 27)]
+
+# remove non-ascii characters
+comments$review_comments <- gsub("[^\x20-\x7E]", "", comments$review_comments)
+
+View(comments)
+str(comments)
+write.csv(comments,file="raw comments.csv")
+
+comments = read.csv("raw comments.csv", stringsAsFactors=FALSE)
+str(comments)
+View(comments)
+comments$X = NULL
+
+# Now load them, and convert the tweets to a Corpus object
+library(tm)
+library(SnowballC)
+corpus = Corpus(VectorSource(comments$review_comments))
+
+# We will use tm_map to process it:
+corpus = tm_map(corpus, tolower)
+corpus = tm_map(corpus, removePunctuation) 
+corpus = tm_map(corpus, removeWords, stopwords("english"))
+corpus = tm_map(corpus, stemDocument)
+
+# Now, we are ready to apply bag of words:
+dtm = DocumentTermMatrix(corpus)
+# To deal with this, we can consider removing words
+# which appear extremely infrequently. The command below
+# removes terms (= words) that appear in fewer than 0.5% of
+# all documents (= do not appear in 99.5% or more of the
+# documents). 
+dtm.sparse = removeSparseTerms(dtm, 0.9)
+#dtm.sparse
+
+# Finally, we need to convert this to a dataframe:
+
+comments.df = as.data.frame(as.matrix(dtm.sparse) )
+#str(comments.df)
+dim(comments.df)
+
+names(comments.df) = paste("w_", names(comments.df),  sep ='')
+#summary(tweets$Avg)
+
+# Next, we need to add the dependent variable.
+# Recall that the dependent variable is numeric (average
+# of 5 people's ratings). 
+# We want to do classification, so let's threshold it:
+comments.df$low_quality = as.factor(comments$low_quality)
+dim(comments.df)
+
+names(comments.df) <- make.names(names(comments.df))
+dim(comments.df)
+write.csv(comments.df,file="processed_comments.csv")
+
+# Before we build our rf model,
+# let's split the data:
+library(caTools)
+set.seed(88)
+spl = sample.split(comments.df$low_quality, SplitRatio = 0.6)
+comments.train = comments.df[spl,]
+comments.test = comments.df[!spl,]
+
+
+###### APPLYING RANDOM FORESTS ######
+
+library(randomForest)
+
+set.seed(88)
+comments.rf = randomForest(low_quality ~ ., data = comments.train)
+
+comments.rf.predict = predict(comments.rf, newdata = comments.test, type = "prob")
+comments.rf.predict = comments.rf.predict[,2]
+
+confMat = table(comments.test$low_quality, comments.rf.predict >= 0.1)
+confMat
+
+accuracy_rf = sum(diag(confMat))/nrow(comments.test)
+accuracy_rf
+
+pred = prediction(comments.rf.predict, comments.test$Negative)
+auc_rf = as.numeric(performance(pred,"auc")@y.values)
+auc_rf
+# Much better! 
+
+# Look at the variable importances:
+varImpPlot(comments.rf)
+
+
